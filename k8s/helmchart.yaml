@@ -29,24 +29,21 @@ spec:
       tag: v4.6
       pullPolicy: IfNotPresent
 
-    replicaCount: 1                 # RWO PVC for media; bump after switching to RWX
+    replicaCount: 1
 
-    # Worker shares the media PVC with web → multi-attach error on RWO. Disable
-    # for v1; the housekeeping CronJob handles the periodic tasks the worker
-    # would otherwise do. Re-enable after switching media to RWX or splitting
-    # into per-component PVCs.
+    # Worker shares the media PVC with web. The PVC is RWX (Longhorn share-manager),
+    # so multi-attach is fine.
     worker:
-      enabled: false
-      replicaCount: 0
+      replicaCount: 1
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits:   { cpu: 500m, memory: 384Mi }
 
     # gunicorn: workers=1 threads=8 — avoids prometheus_multiproc_dir
     # data-corruption gotcha while still saturating Pi 4 cores.
     gunicorn:
       workers: 1
       threads: 8
-
-    worker:
-      replicaCount: 1
 
     housekeeping:
       enabled: true
@@ -96,11 +93,12 @@ spec:
       replica:
         replicaCount: 0   # primary-only is enough for NetBox
 
-    # Persistence for /opt/netbox/netbox/{media,reports,scripts}
+    # Persistence for /opt/netbox/netbox/{media,reports,scripts}.
+    # RWX so web + worker can share the volume (Longhorn share-manager NFS).
     persistence:
       enabled: true
       storageClass: longhorn
-      accessMode: ReadWriteOnce
+      accessMode: ReadWriteMany
       size: 5Gi
 
     # We manage two Ingress objects ourselves (one per domain)
