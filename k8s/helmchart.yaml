@@ -15,6 +15,14 @@ spec:
   targetNamespace: netbox
   createNamespace: false
   valuesContent: |-
+    # Bitnami subcharts (redis) refuse to deploy with non-allowlisted images
+    # (their new "verifyImages" security gate). bitnamilegacy/* images are the
+    # exact same binaries Bitnami yanked, just under a new namespace, so we
+    # opt out of the check.
+    global:
+      security:
+        allowInsecureImages: true
+
     image:
       repository: docker.io/netboxcommunity/netbox
       tag: v4.6
