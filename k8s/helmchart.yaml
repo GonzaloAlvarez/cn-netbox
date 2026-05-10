@@ -24,7 +24,8 @@ spec:
         allowInsecureImages: true
 
     image:
-      repository: docker.io/netboxcommunity/netbox
+      registry: docker.io
+      repository: netboxcommunity/netbox
       tag: v4.6
       pullPolicy: IfNotPresent
 
