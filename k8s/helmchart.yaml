@@ -1,0 +1,103 @@
+---
+# NetBox 4.x via the maintained community chart.
+# Multi-host via ALLOWED_HOSTS / CSRF_TRUSTED_ORIGINS env vars.
+# External Postgres = the CNPG Cluster created in pg-cluster.yaml.
+# Bundled Redis (chart default) on Longhorn.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: netbox
+  namespace: kube-system
+spec:
+  chart: netbox
+  repo: https://charts.netbox.oss.netboxlabs.com
+  version: "5.0.x"
+  targetNamespace: netbox
+  createNamespace: false
+  valuesContent: |-
+    image:
+      repository: docker.io/netboxcommunity/netbox
+      tag: v4.6
+      pullPolicy: IfNotPresent
+
+    replicaCount: 1                 # RWO PVC for media; bump after switching to RWX
+
+    # gunicorn: workers=1 threads=8 — avoids prometheus_multiproc_dir
+    # data-corruption gotcha while still saturating Pi 4 cores.
+    gunicorn:
+      workers: 1
+      threads: 8
+
+    worker:
+      replicaCount: 1
+
+    housekeeping:
+      enabled: true
+      schedule: "0 3 * * *"
+
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        namespace: netbox
+
+    # External Postgres via CNPG
+    postgresql:
+      enabled: false
+    externalDatabase:
+      host: netbox-pg-rw.netbox.svc.cluster.local
+      port: 5432
+      database: netbox
+      username: netbox
+      existingSecretName: netbox-pg-app
+      existingSecretKey: password
+
+    # Bundled Redis (chart default; switch to external if needed)
+    redis:
+      enabled: true
+      auth:
+        existingSecret: netbox-secrets
+        existingSecretPasswordKey: REDIS_PASSWORD
+      master:
+        persistence:
+          enabled: true
+          size: 1Gi
+          storageClass: longhorn
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits:   { cpu: 200m, memory: 128Mi }
+
+    # Persistence for /opt/netbox/netbox/{media,reports,scripts}
+    persistence:
+      enabled: true
+      storageClass: longhorn
+      accessMode: ReadWriteOnce
+      size: 5Gi
+
+    # We manage two Ingress objects ourselves (one per domain)
+    ingress:
+      enabled: false
+
+    # Multi-host: NetBox accepts requests for both domains.
+    # ALLOWED_HOSTS is space-delimited; CSRF_TRUSTED_ORIGINS requires scheme.
+    extraEnvs:
+      - name: ALLOWED_HOSTS
+        value: "netbox.k8s.lan netbox.lab.gn.al localhost"
+      - name: CSRF_TRUSTED_ORIGINS
+        value: "https://netbox.k8s.lan https://netbox.lab.gn.al http://netbox.k8s.lan http://netbox.lab.gn.al"
+      - name: METRICS_ENABLED
+        value: "true"
+
+    # Initial superuser bootstrap
+    superuser:
+      existingSecret: netbox-secrets
+      passwordKey: SUPERUSER_PASSWORD
+      apiTokenKey: SUPERUSER_API_TOKEN
+
+    # SECRET_KEY must be stable across pod restarts — comes from sealed Secret.
+    # The chart's `existingSecret` value mounts it.
+    existingSecret: netbox-secrets
+
+    resources:
+      requests: { cpu: 200m, memory: 512Mi }
+      limits:   { cpu: 1500m, memory: 1Gi }

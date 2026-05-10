@@ -1,0 +1,32 @@
+---
+# CloudNativePG cluster for NetBox. 3 instances (primary + 2 standby) on
+# Longhorn-backed PVCs. Replicas spread across storage workers (rpid3-rpid6)
+# automatically by CNPG's affinity defaults.
+#
+# DB credentials end up in Secret 'netbox-pg-app' (CNPG creates it).
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: netbox-pg
+  namespace: netbox
+spec:
+  instances: 3
+  storage:
+    size: 20Gi
+    storageClass: longhorn
+  bootstrap:
+    initdb:
+      database: netbox
+      owner: netbox
+  monitoring:
+    enablePodMonitor: false   # flip to true if you re-enable PodMonitor on CNPG operator
+  postgresql:
+    parameters:
+      shared_buffers: 256MB
+      max_connections: "200"
+  resources:
+    requests: { cpu: 100m, memory: 384Mi }
+    limits:   { cpu: 1500m, memory: 768Mi }
+  # Backups deferred to v1.5 — drop into spec.backup once an S3 bucket exists.
+  # Until then, do `kubectl exec netbox-pg-1 -- pg_dump | save somewhere` for
+  # ad-hoc snapshots.
