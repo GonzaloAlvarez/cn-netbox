@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
+  "timezone": "America/New_York",
+  "schedule": ["after 9pm and before 6am every weekday", "every weekend"],
+  "labels": ["dependencies"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["k8s/helmchart\\.ya?ml$"],
+      "matchStrings": [
+        "chart:\\s*(?<depName>[\\w-]+)\\s*\\n\\s*repo:\\s*(?<registryUrl>https?://\\S+)\\s*\\n(?:[^\\n]*\\n)*?\\s*version:\\s*[\"']?(?<currentValue>[\\w.\\-]+?)[\"']?\\s*$"
+      ],
+      "datasourceTemplate": "helm"
+    },
+    {
+      "customType": "regex",
+      "fileMatch": ["k8s/.+\\.ya?ml$"],
+      "matchStrings": [
+        "repository:\\s*(?<depName>netboxcommunity/netbox)\\s*\\n\\s*tag:\\s*[\"']?(?<currentValue>v[\\d.]+)[\"']?"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    { "matchUpdateTypes": ["patch"], "automerge": true },
+    { "matchUpdateTypes": ["minor", "major"], "automerge": false }
+  ]
+}
