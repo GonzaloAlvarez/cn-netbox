@@ -128,5 +128,23 @@ spec:
     existingSecret: netbox-secrets
 
     resources:
-      requests: { cpu: 200m, memory: 512Mi }
-      limits:   { cpu: 1500m, memory: 1Gi }
+      requests: { cpu: 200m, memory: 768Mi }
+      limits:   { cpu: 2000m, memory: 1536Mi }
+
+    # NetBox initial DB migration takes 5-10 min on Pi storage. Stretch the
+    # probes so kubelet doesn't kill the container mid-migration.
+    startupProbe:
+      enabled: true
+      failureThreshold: 60
+      periodSeconds: 15
+      timeoutSeconds: 10
+    livenessProbe:
+      enabled: true
+      initialDelaySeconds: 600
+      periodSeconds: 30
+      timeoutSeconds: 10
+    readinessProbe:
+      enabled: true
+      initialDelaySeconds: 30
+      periodSeconds: 15
+      timeoutSeconds: 10
