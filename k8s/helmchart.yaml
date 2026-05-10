@@ -52,9 +52,19 @@ spec:
       existingSecretName: netbox-pg-app
       existingSecretKey: password
 
-    # Bundled Redis (chart default; switch to external if needed)
+    # Bundled Redis (Bitnami subchart). Bitnami yanked their free image catalog
+    # in Aug 2025; use the bitnamilegacy/* images that they moved still-existing
+    # binaries into. (Same images, different namespace.)
     redis:
       enabled: true
+      image:
+        repository: bitnamilegacy/redis
+      sentinel:
+        image:
+          repository: bitnamilegacy/redis-sentinel
+      kubectl:
+        image:
+          repository: bitnamilegacy/kubectl
       auth:
         existingSecret: netbox-secrets
         existingSecretPasswordKey: REDIS_PASSWORD
@@ -66,6 +76,8 @@ spec:
         resources:
           requests: { cpu: 50m, memory: 64Mi }
           limits:   { cpu: 200m, memory: 128Mi }
+      replica:
+        replicaCount: 0   # primary-only is enough for NetBox
 
     # Persistence for /opt/netbox/netbox/{media,reports,scripts}
     persistence:
