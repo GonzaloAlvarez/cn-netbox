@@ -106,20 +106,26 @@ spec:
       enabled: false
 
     # Multi-host: NetBox accepts requests for both domains.
-    # ALLOWED_HOSTS is space-delimited; CSRF_TRUSTED_ORIGINS requires scheme.
-    extraEnvs:
-      - name: ALLOWED_HOSTS
-        value: "netbox.k8s.lan netbox.lab.gn.al localhost"
-      - name: CSRF_TRUSTED_ORIGINS
-        value: "https://netbox.k8s.lan https://netbox.lab.gn.al http://netbox.k8s.lan http://netbox.lab.gn.al"
-      - name: METRICS_ENABLED
-        value: "true"
+    # NB: the chart writes these into /run/config/netbox/netbox.yaml — env vars
+    # like ALLOWED_HOSTS are ignored. Use `allowedHosts` (list) and
+    # `csrf.trustedOrigins` (list, scheme required).
+    allowedHosts:
+      - netbox.k8s.lan
+      - netbox.lab.gn.al
+      - localhost
+    csrf:
+      trustedOrigins:
+        - https://netbox.k8s.lan
+        - https://netbox.lab.gn.al
+        - http://netbox.k8s.lan
 
-    # Initial superuser bootstrap
+    # Initial superuser bootstrap. Keys are lowercase to match the actual
+    # keys in the sealed Secret (the chart silently treats missing keys as
+    # empty, which would mean a fresh install boots with no admin password).
     superuser:
       existingSecret: netbox-secrets
-      passwordKey: SUPERUSER_PASSWORD
-      apiTokenKey: SUPERUSER_API_TOKEN
+      passwordKey: superuser_password
+      apiTokenKey: api_token
 
     # SECRET_KEY must be stable across pod restarts — comes from sealed Secret.
     # The chart's `existingSecret` value mounts it.
