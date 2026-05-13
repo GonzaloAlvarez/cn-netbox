@@ -8,3 +8,4 @@ resources:
   - helmchart.yaml
   - ingress-lan.yaml
   - ingress-lab.yaml
+  - backup.yaml

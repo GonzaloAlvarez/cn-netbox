@@ -45,6 +45,55 @@ kubectl create secret generic netbox-secrets \
   | kubeseal --format yaml --controller-namespace kube-system --controller-name sealed-secrets-controller \
   > k8s/sealed-secrets.yaml
 
-echo "✓ k8s/sealed-secrets.yaml written"
+echo "✓ wrote netbox-secrets"
 echo
+
+# --- Backup destination + SMTP notifications -----------------------------------
+# Drives the netbox-pg-dump + netbox-volume-backup Deployments in backup.yaml.
+# Mirrors the cn-vaultwarden env shape (BACKUP_S3_*, BACKUP_WEBDAV_*, SMTP_*).
+echo "Backup destination — AWS S3 (required):"
+BACKUP_S3_BUCKET=$(prompt "" "S3 bucket name")
+BACKUP_AWS_ACCESS_KEY_ID=$(prompt "" "S3 access key id" "" hidden)
+BACKUP_AWS_SECRET_ACCESS_KEY=$(prompt "" "S3 secret access key" "" hidden)
+BACKUP_AWS_REGION=$(prompt "" "S3 region" "us-east-1")
+echo
+
+echo "Backup destination — WebDAV (optional, press enter to skip):"
+BACKUP_WEBDAV_URL=$(prompt "" "WebDAV URL" "")
+BACKUP_WEBDAV_USER=$(prompt "" "WebDAV user" "")
+if [[ -n "$BACKUP_WEBDAV_URL" ]]; then
+  BACKUP_WEBDAV_PASSWORD=$(prompt "" "WebDAV password" "" hidden)
+else
+  BACKUP_WEBDAV_PASSWORD=""
+fi
+echo
+
+echo "Notifications — SMTP (used for backup success/failure alerts):"
+SMTP_HOST=$(prompt "" "SMTP host")
+SMTP_PORT=$(prompt "" "SMTP port" "587")
+SMTP_USERNAME=$(prompt "" "SMTP username")
+SMTP_PASSWORD=$(prompt "" "SMTP password" "" hidden)
+SMTP_FROM=$(prompt "" "SMTP from address")
+ALERT_EMAIL=$(prompt "" "Alert recipient")
+NOTIFICATION_URLS="smtp://${SMTP_USERNAME}:${SMTP_PASSWORD}@${SMTP_HOST}:${SMTP_PORT}/?from=${SMTP_FROM}&to=${ALERT_EMAIL}&starttls=yes"
+
+{
+  echo "---"
+  kubectl create secret generic netbox-backup \
+    --namespace netbox \
+    --dry-run=client -o yaml \
+    --from-literal=BACKUP_S3_BUCKET="$BACKUP_S3_BUCKET" \
+    --from-literal=BACKUP_AWS_ACCESS_KEY_ID="$BACKUP_AWS_ACCESS_KEY_ID" \
+    --from-literal=BACKUP_AWS_SECRET_ACCESS_KEY="$BACKUP_AWS_SECRET_ACCESS_KEY" \
+    --from-literal=BACKUP_AWS_REGION="$BACKUP_AWS_REGION" \
+    --from-literal=BACKUP_WEBDAV_URL="$BACKUP_WEBDAV_URL" \
+    --from-literal=BACKUP_WEBDAV_USER="$BACKUP_WEBDAV_USER" \
+    --from-literal=BACKUP_WEBDAV_PASSWORD="$BACKUP_WEBDAV_PASSWORD" \
+    --from-literal=NOTIFICATION_URLS="$NOTIFICATION_URLS" \
+    | kubeseal --format yaml --controller-namespace kube-system --controller-name sealed-secrets-controller
+} >> k8s/sealed-secrets.yaml
+
+echo "✓ wrote netbox-backup"
+echo
+echo "k8s/sealed-secrets.yaml now contains: netbox-secrets + netbox-backup"
 echo "Next: git add k8s/sealed-secrets.yaml && git commit && git push"

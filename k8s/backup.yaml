@@ -1,0 +1,217 @@
+---
+# Backup pipeline for NetBox — mirrors the cn-vaultwarden model
+# (offen/docker-volume-backup + S3 + WebDAV + SMTP + 56-day retention),
+# adapted to k8s.
+#
+# Two daemon-mode Deployments:
+#   * netbox-pg-dump          — prodrigestivill/postgres-backup-local
+#                               dumps the CNPG primary every 12h to
+#                               /backups (an RWX PVC).
+#   * netbox-volume-backup    — offen/docker-volume-backup
+#                               weekly tars /backup/pg-dumps + /backup/media,
+#                               ships to S3 + WebDAV, fires SMTP on the result.
+#
+# Secrets live in `netbox-backup` (sealed). DB creds come from the existing
+# CNPG-generated `netbox-pg-app` Secret.
+#
+# CONFIRM BEFORE APPLY:
+#   kubectl -n netbox get pvc
+# and adjust `claimName: netbox-media` below if the chart-generated PVC
+# uses a different name in your chart version.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: netbox-pg-dumps
+  namespace: netbox
+spec:
+  accessModes: [ "ReadWriteMany" ]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox-pg-dump
+  namespace: netbox
+  labels:
+    app: netbox-pg-dump
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: netbox-pg-dump
+  template:
+    metadata:
+      labels:
+        app: netbox-pg-dump
+    spec:
+      containers:
+        - name: pg-dump
+          # Must match the CNPG postgres major. Current cluster image:
+          #   ghcr.io/cloudnative-pg/postgresql:18.3-system-trixie
+          # Verify with: kubectl -n netbox exec netbox-pg-1 -- psql -V
+          image: prodrigestivill/postgres-backup-local:18
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_HOST
+              value: netbox-pg-rw.netbox.svc.cluster.local
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: netbox
+            - name: POSTGRES_USER
+              value: netbox
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-pg-app
+                  key: password
+            - name: SCHEDULE
+              value: "@every 12h"
+            - name: BACKUP_KEEP_DAYS
+              value: "14"
+            - name: BACKUP_KEEP_WEEKS
+              value: "8"
+            - name: BACKUP_KEEP_MONTHS
+              value: "6"
+            - name: POSTGRES_EXTRA_OPTS
+              value: "--format=custom --blobs --compress=6"
+            - name: HEALTHCHECK_PORT
+              value: "8080"
+          ports:
+            - name: health
+              containerPort: 8080
+          volumeMounts:
+            - name: dumps
+              mountPath: /backups
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: dumps
+          persistentVolumeClaim:
+            claimName: netbox-pg-dumps
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netbox-volume-backup
+  namespace: netbox
+  labels:
+    app: netbox-volume-backup
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: netbox-volume-backup
+  template:
+    metadata:
+      labels:
+        app: netbox-volume-backup
+    spec:
+      containers:
+        - name: volume-backup
+          image: offen/docker-volume-backup:v2.43.4
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BACKUP_CRON_EXPRESSION
+              value: "0 3 * * 0"
+            - name: BACKUP_FILENAME
+              value: "netbox-%Y-%m-%dT%H-%M-%S.tar.gz"
+            - name: BACKUP_RETENTION_DAYS
+              value: "56"
+            - name: BACKUP_PRUNING_LEEWAY
+              value: "10m"
+            - name: BACKUP_SOURCES
+              value: "/backup"
+            # S3 — required
+            - name: AWS_S3_BUCKET_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-backup
+                  key: BACKUP_S3_BUCKET
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-backup
+                  key: BACKUP_AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-backup
+                  key: BACKUP_AWS_SECRET_ACCESS_KEY
+            - name: AWS_S3_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-backup
+                  key: BACKUP_AWS_REGION
+            - name: AWS_S3_PATH
+              value: "netbox/"
+            # WebDAV — optional secondary target
+            - name: WEBDAV_URL
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-backup
+                  key: BACKUP_WEBDAV_URL
+                  optional: true
+            - name: WEBDAV_PATH
+              value: "/netbox/"
+            - name: WEBDAV_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-backup
+                  key: BACKUP_WEBDAV_USER
+                  optional: true
+            - name: WEBDAV_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-backup
+                  key: BACKUP_WEBDAV_PASSWORD
+                  optional: true
+            # SMTP notification (success + failure)
+            - name: NOTIFICATION_URLS
+              valueFrom:
+                secretKeyRef:
+                  name: netbox-backup
+                  key: NOTIFICATION_URLS
+          volumeMounts:
+            - name: pg-dumps
+              mountPath: /backup/pg-dumps
+              readOnly: true
+            - name: media
+              mountPath: /backup/media
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: pg-dumps
+          persistentVolumeClaim:
+            claimName: netbox-pg-dumps
+        - name: media
+          persistentVolumeClaim:
+            # If the NetBox chart names the media PVC differently, adjust here.
+            # Check: `kubectl -n netbox get pvc`
+            claimName: netbox-media
