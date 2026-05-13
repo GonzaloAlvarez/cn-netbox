@@ -73,7 +73,7 @@ kubectl -n netbox exec deploy/netbox-pg-dump -- /backup.sh
 kubectl -n netbox exec deploy/netbox-pg-dump -- ls -lh /backups/last/
 
 # Force an immediate offen run (override schedule)
-kubectl -n netbox exec deploy/netbox-volume-backup -- kill -SIGUSR1 1
+kubectl -n netbox exec deploy/netbox-volume-backup -- /usr/bin/backup
 kubectl -n netbox logs deploy/netbox-volume-backup --tail=50
 
 # Confirm S3 object lands
