@@ -142,6 +142,22 @@ spec:
       failureThreshold: 60
       periodSeconds: 15
       timeoutSeconds: 10
+    # Chart 5.x hard-codes livenessProbe to GET :8081/status/applications/netbox/processes/running
+    # (nginx-unit status). NetBox v4.6 dropped nginx-unit for granian, which only listens on :8080,
+    # so the default probe is "connection refused" every cycle and kubelet restarts the container
+    # every ~11 min. Override to hit /login/ on :8080 with a Host header that matches ALLOWED_HOSTS.
+    customLivenessProbe:
+      httpGet:
+        path: /login/
+        port: http
+        httpHeaders:
+          - name: Host
+            value: netbox.k8s.lan
+      initialDelaySeconds: 600
+      periodSeconds: 30
+      timeoutSeconds: 10
+      failureThreshold: 3
+      successThreshold: 1
     livenessProbe:
       enabled: true
       initialDelaySeconds: 600
