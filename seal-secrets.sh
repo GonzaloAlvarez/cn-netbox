@@ -10,7 +10,9 @@ prompt() {
   local var="$1" prompt_text="$2" default="${3:-}" hidden="${4:-}"
   local value
   if [[ -n "$hidden" ]]; then
-    read -rsp "${prompt_text}: " value; echo
+    # `echo >&2` keeps the trailing newline on stderr (where read -p's prompt
+    # also lives) so it doesn't pollute the value captured via $(prompt ...).
+    read -rsp "${prompt_text}: " value; echo >&2
   else
     if [[ -n "$default" ]]; then
       read -rp "${prompt_text} [${default}]: " value
