@@ -1,10 +1,68 @@
 #!/usr/bin/env bash
 # Generate / prompt for NetBox secrets and write a sealed-secrets manifest.
 # Idempotent — re-running prompts again with the existing values as defaults.
+#
+# Flags:
+#   --core   Prompt only for NetBox-specific creds (superuser password + API
+#            token). Backup destination + SMTP values are harvested over SSH
+#            from passwords.lan:~/cn-vaultwarden/.env (the .env is the canonical
+#            source for the shared S3 bucket + SMTP smarthost — same variable
+#            names as cn-netbox already uses).
 set -euo pipefail
 
 cd "$(dirname "$0")"
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config-rpid}"
+
+CORE_ONLY=0
+case "${1:-}" in
+  --core) CORE_ONLY=1 ;;
+  -h|--help)
+    sed -n '/^#!/d; /^[^#]/q; s/^# \{0,1\}//p' "$0"
+    exit 0
+    ;;
+  "" ) ;;
+  *)
+    echo "unknown argument: $1 (try --help)" >&2
+    exit 2
+    ;;
+esac
+
+harvest_backup_smtp_from_vault() {
+  local tmp keys
+  tmp=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp'" RETURN
+
+  keys='^(BACKUP_S3_BUCKET|BACKUP_AWS_ACCESS_KEY_ID|BACKUP_AWS_SECRET_ACCESS_KEY|BACKUP_AWS_REGION|BACKUP_WEBDAV_URL|BACKUP_WEBDAV_USER|BACKUP_WEBDAV_PASSWORD|SMTP_HOST|SMTP_PORT|SMTP_USERNAME|SMTP_PASSWORD|SMTP_FROM|ALERT_EMAIL)='
+
+  echo "Harvesting backup + SMTP values from passwords.lan:~/cn-vaultwarden/.env …"
+  if ! ssh -o BatchMode=yes -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
+        -l gonzalo -i ~/.ssh/gonzalo_main_private_key.pem passwords.lan \
+        "grep -E '${keys}' ~/cn-vaultwarden/.env" > "$tmp"; then
+    echo "ERROR: ssh to passwords.lan failed (is the Pi up + key authorized?)" >&2
+    return 1
+  fi
+
+  if [[ ! -s "$tmp" ]]; then
+    echo "ERROR: no matching keys in passwords.lan:~/cn-vaultwarden/.env" >&2
+    return 1
+  fi
+
+  # shellcheck disable=SC1090
+  set -a; . "$tmp"; set +a
+
+  # Sanity check — verify all required keys arrived.
+  local missing=()
+  for v in BACKUP_S3_BUCKET BACKUP_AWS_ACCESS_KEY_ID BACKUP_AWS_SECRET_ACCESS_KEY BACKUP_AWS_REGION SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD SMTP_FROM ALERT_EMAIL; do
+    [[ -n "${!v:-}" ]] || missing+=("$v")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    echo "ERROR: missing/empty in source .env: ${missing[*]}" >&2
+    return 1
+  fi
+
+  echo "✓ harvested: S3=${BACKUP_S3_BUCKET} region=${BACKUP_AWS_REGION} webdav=${BACKUP_WEBDAV_URL:-<unset>} smtp=${SMTP_HOST}:${SMTP_PORT} from=${SMTP_FROM} to=${ALERT_EMAIL}"
+}
 
 prompt() {
   local var="$1" prompt_text="$2" default="${3:-}" hidden="${4:-}"
@@ -37,13 +95,24 @@ SUPERUSER_PASSWORD=$(prompt "" "Initial NetBox superuser password (admin)" "" hi
 SUPERUSER_API_TOKEN=$(prompt "" "Initial NetBox API token" "" hidden)
 REDIS_PASSWORD=$(generate_random)
 
+# Chart 5.x projects multiple keys from netbox-secrets, some lowercase and some
+# UPPERCASE — and a couple for SMTP that must exist even when unused (kubelet
+# fails the projected-volume mount on a missing key, not just on a referenced
+# env var). Emit every variant the chart looks up, with empty defaults for SMTP.
 kubectl create secret generic netbox-secrets \
   --namespace netbox \
   --dry-run=client -o yaml \
   --from-literal=SECRET_KEY="$SECRET_KEY" \
+  --from-literal=secret_key="$SECRET_KEY" \
   --from-literal=SUPERUSER_PASSWORD="$SUPERUSER_PASSWORD" \
+  --from-literal=superuser_password="$SUPERUSER_PASSWORD" \
+  --from-literal=password="$SUPERUSER_PASSWORD" \
   --from-literal=SUPERUSER_API_TOKEN="$SUPERUSER_API_TOKEN" \
+  --from-literal=api_token="$SUPERUSER_API_TOKEN" \
   --from-literal=REDIS_PASSWORD="$REDIS_PASSWORD" \
+  --from-literal=redis_password="$REDIS_PASSWORD" \
+  --from-literal=username="" \
+  --from-literal=email_password="" \
   | kubeseal --format yaml --controller-namespace kube-system --controller-name sealed-secrets-controller \
   > k8s/sealed-secrets.yaml
 
@@ -53,30 +122,37 @@ echo
 # --- Backup destination + SMTP notifications -----------------------------------
 # Drives the netbox-pg-dump + netbox-volume-backup Deployments in backup.yaml.
 # Mirrors the cn-vaultwarden env shape (BACKUP_S3_*, BACKUP_WEBDAV_*, SMTP_*).
-echo "Backup destination — AWS S3 (required):"
-BACKUP_S3_BUCKET=$(prompt "" "S3 bucket name")
-BACKUP_AWS_ACCESS_KEY_ID=$(prompt "" "S3 access key id" "" hidden)
-BACKUP_AWS_SECRET_ACCESS_KEY=$(prompt "" "S3 secret access key" "" hidden)
-BACKUP_AWS_REGION=$(prompt "" "S3 region" "us-east-1")
-echo
-
-echo "Backup destination — WebDAV (optional, press enter to skip):"
-BACKUP_WEBDAV_URL=$(prompt "" "WebDAV URL" "")
-BACKUP_WEBDAV_USER=$(prompt "" "WebDAV user" "")
-if [[ -n "$BACKUP_WEBDAV_URL" ]]; then
-  BACKUP_WEBDAV_PASSWORD=$(prompt "" "WebDAV password" "" hidden)
+if [[ $CORE_ONLY -eq 1 ]]; then
+  harvest_backup_smtp_from_vault
+  : "${BACKUP_WEBDAV_URL:=}"
+  : "${BACKUP_WEBDAV_USER:=}"
+  : "${BACKUP_WEBDAV_PASSWORD:=}"
 else
-  BACKUP_WEBDAV_PASSWORD=""
-fi
-echo
+  echo "Backup destination — AWS S3 (required):"
+  BACKUP_S3_BUCKET=$(prompt "" "S3 bucket name")
+  BACKUP_AWS_ACCESS_KEY_ID=$(prompt "" "S3 access key id" "" hidden)
+  BACKUP_AWS_SECRET_ACCESS_KEY=$(prompt "" "S3 secret access key" "" hidden)
+  BACKUP_AWS_REGION=$(prompt "" "S3 region" "us-east-1")
+  echo
 
-echo "Notifications — SMTP (used for backup success/failure alerts):"
-SMTP_HOST=$(prompt "" "SMTP host")
-SMTP_PORT=$(prompt "" "SMTP port" "587")
-SMTP_USERNAME=$(prompt "" "SMTP username")
-SMTP_PASSWORD=$(prompt "" "SMTP password" "" hidden)
-SMTP_FROM=$(prompt "" "SMTP from address")
-ALERT_EMAIL=$(prompt "" "Alert recipient")
+  echo "Backup destination — WebDAV (optional, press enter to skip):"
+  BACKUP_WEBDAV_URL=$(prompt "" "WebDAV URL" "")
+  BACKUP_WEBDAV_USER=$(prompt "" "WebDAV user" "")
+  if [[ -n "$BACKUP_WEBDAV_URL" ]]; then
+    BACKUP_WEBDAV_PASSWORD=$(prompt "" "WebDAV password" "" hidden)
+  else
+    BACKUP_WEBDAV_PASSWORD=""
+  fi
+  echo
+
+  echo "Notifications — SMTP (used for backup success/failure alerts):"
+  SMTP_HOST=$(prompt "" "SMTP host")
+  SMTP_PORT=$(prompt "" "SMTP port" "587")
+  SMTP_USERNAME=$(prompt "" "SMTP username")
+  SMTP_PASSWORD=$(prompt "" "SMTP password" "" hidden)
+  SMTP_FROM=$(prompt "" "SMTP from address")
+  ALERT_EMAIL=$(prompt "" "Alert recipient")
+fi
 NOTIFICATION_URLS="smtp://${SMTP_USERNAME}:${SMTP_PASSWORD}@${SMTP_HOST}:${SMTP_PORT}/?from=${SMTP_FROM}&to=${ALERT_EMAIL}&starttls=yes"
 
 {
