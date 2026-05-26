@@ -111,7 +111,8 @@ kubectl create secret generic netbox-secrets \
   --from-literal=api_token="$SUPERUSER_API_TOKEN" \
   --from-literal=REDIS_PASSWORD="$REDIS_PASSWORD" \
   --from-literal=redis_password="$REDIS_PASSWORD" \
-  --from-literal=username="" \
+  --from-literal=username="admin" \
+  --from-literal=email="admin@netbox.lab.gn.al" \
   --from-literal=email_password="" \
   | kubeseal --format yaml --controller-namespace kube-system --controller-name sealed-secrets-controller \
   > k8s/sealed-secrets.yaml
