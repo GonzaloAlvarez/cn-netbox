@@ -77,6 +77,7 @@ data:
     """
     import os
     import sys
+    import types
 
     from social_core.backends.open_id_connect import OpenIdConnectAuth
 
@@ -116,12 +117,15 @@ data:
 
 
     # NetBox's configuration.py loads us into sys.modules at
-    # 'netbox.configuration.extra', but `netbox.configuration` is a module
-    # (single file), not a package — Django's import_string therefore fails
-    # with "ModuleNotFoundError: 'netbox.configuration' is not a package" when
-    # asked to resolve REMOTE_AUTH_BACKEND. Re-register this module under a
-    # top-level name so plain import_module('homelab_oidc_extra') succeeds.
-    sys.modules['homelab_oidc_extra'] = sys.modules['netbox.configuration.extra']
+    # 'netbox.configuration.extra' AFTER our module body finishes executing,
+    # AND `netbox.configuration` is a single-file module (not a package), so
+    # Django's import_string can't resolve REMOTE_AUTH_BACKEND through it
+    # either way. Build a brand-new top-level ModuleType with just the
+    # backend class and register it now; Django will find it via
+    # import_module('homelab_oidc_extra').
+    _homelab_oidc_module = types.ModuleType('homelab_oidc_extra')
+    _homelab_oidc_module.HomelabOIDCBackend = HomelabOIDCBackend
+    sys.modules['homelab_oidc_extra'] = _homelab_oidc_module
 
     REMOTE_AUTH_ENABLED = True
     REMOTE_AUTH_BACKEND = 'homelab_oidc_extra.HomelabOIDCBackend'
