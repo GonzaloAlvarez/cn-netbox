@@ -83,6 +83,16 @@ data:
     SOCIAL_AUTH_OIDC_KEY = os.environ.get('SOCIAL_AUTH_OIDC_KEY', '')
     SOCIAL_AUTH_OIDC_SECRET = os.environ.get('SOCIAL_AUTH_OIDC_SECRET', '')
 
+    # NetBox is behind ingress-nginx (LAN) / VPS traefik-lab (tailnet) — both
+    # terminate TLS and forward HTTP to the pod. Without these, Django sees
+    # request.is_secure() == False and python-social-auth constructs an
+    # http:// redirect_uri, which Authentik refuses because its registered
+    # URI is https://. Trust the X-Forwarded-Proto header from the proxies
+    # and force the OIDC redirect to https either way.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    USE_X_FORWARDED_HOST = True
+    SOCIAL_AUTH_REDIRECT_IS_HTTPS = True
+
     # Force OIDC discovery + tokens over a CA bundle that includes step-ca.
     # The init container in helmchart.yaml builds /tls/ca-bundle.crt by
     # concatenating the system trust store with the step-ca root, so requests
