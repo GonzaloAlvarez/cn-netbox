@@ -105,8 +105,15 @@ data:
         - **Scope**: include `groups` so Authentik puts the user's group
           membership in the id_token; the pipeline step below maps it to
           NetBox superuser / Django group membership.
-        - **User details**: hoist `groups` out of the id_token claims so
-          it's available to downstream pipeline steps as `details['groups']`.
+
+        We deliberately do NOT override get_user_details() to add a `groups`
+        key — the default PSA `user_details` pipeline step iterates the
+        details dict and does `setattr(user, key, value)` on every entry,
+        which raises TypeError on the `groups` M2M relationship ("Direct
+        assignment to the forward side of a many-to-many set is prohibited").
+        The role handler below reads the groups claim from `response`
+        directly, which is the raw token payload PSA passes through to
+        every pipeline step.
         """
 
         name = 'oidc'
@@ -121,17 +128,8 @@ data:
                     return base.replace('auth.neptune.lan', 'auth.lab.gn.al', 1)
             return base
 
-        def get_user_details(self, response):
-            details = super().get_user_details(response)
-            # The `groups` claim lives in the id_token; PSA's
-            # OAuth2OpenIdConnectMixin merges decoded id_token claims into the
-            # response dict before pipeline steps run, so response['groups']
-            # is the canonical place to read them.
-            details['groups'] = response.get('groups') or []
-            return details
 
-
-    def homelab_authentik_role_handler(strategy, details, user=None, *args, **kwargs):
+    def homelab_authentik_role_handler(strategy, details, user=None, response=None, *args, **kwargs):
         """Map Authentik OIDC groups onto NetBox roles + Django group membership.
 
         - Authentik group `infra-admins`  → NetBox superuser (full access).
@@ -139,11 +137,16 @@ data:
           group is auto-created if it didn't already exist locally. NetBox
           object-permissions can then be scoped per-group inside the UI.
 
+        Reads `response['groups']` (the raw id_token claim) — NOT
+        `details['groups']`, because PSA's user_details step would then try
+        to setattr(user, 'groups', [...]) and Django rejects direct
+        assignment to many-to-many relationships.
+
         Runs once per login (PSA pipeline step). Idempotent.
         """
-        if not user:
+        if not user or not response:
             return
-        groups = details.get('groups') or []
+        groups = response.get('groups') or []
 
         from django.contrib.auth.models import Group
 
