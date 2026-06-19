@@ -1,0 +1,92 @@
+---
+# step-ca root CA (Gonzalo Alvarez HomeLab LAN CA Intermediate CA → root).
+# Mounted into the NetBox pod and concatenated with the system CA bundle by
+# an init container so the OIDC backchannel to https://auth.neptune.lan
+# verifies. Update with: `curl -s http://pki.lan/cert/ca.crt`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: step-ca-root
+  namespace: netbox
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    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
+    K4gwn/EJ2Qapbv7iq5DW1Q0=
+    -----END CERTIFICATE-----
+---
+# Overrides the upstream /etc/netbox/config/extra.py with our Authentik OIDC
+# wiring. The chart's `extraConfig` mechanism appends YAML, which is no good
+# for Django settings that need env-var interpolation. extra.py is plain
+# Python — Django reads it at import time, so we can pull secrets from env.
+#
+# The chart projects `SOCIAL_AUTH_OIDC_{KEY,SECRET}` into the pod via the
+# `extraEnvs` block in helmchart.yaml (valueFrom: secretKeyRef →
+# netbox-secrets), and the endpoint URL is a plain literal.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: netbox-oidc-extra
+  namespace: netbox
+data:
+  extra.py: |
+    """OIDC integration via Authentik on auth.neptune.lan.
+
+    Authentik provider + application are created by
+    cn-authentik/setup-netbox-oidc.sh. NetBox-side wiring uses
+    python-social-auth's OpenIdConnectAuth backend (bundled with NetBox 4.x).
+
+    Login URL:        /oauth/login/oidc/?next=/
+    Callback URL:     /oauth/complete/oidc/  (registered on the Authentik side)
+    Issuer endpoint:  https://auth.neptune.lan/application/o/netbox
+    """
+    import os
+
+    REMOTE_AUTH_ENABLED = True
+    REMOTE_AUTH_BACKEND = 'social_core.backends.open_id_connect.OpenIdConnectAuth'
+    REMOTE_AUTH_AUTO_CREATE_USER = True
+
+    SOCIAL_AUTH_OIDC_OIDC_ENDPOINT = os.environ.get(
+        'SOCIAL_AUTH_OIDC_OIDC_ENDPOINT',
+        'https://auth.neptune.lan/application/o/netbox',
+    )
+    SOCIAL_AUTH_OIDC_KEY = os.environ.get('SOCIAL_AUTH_OIDC_KEY', '')
+    SOCIAL_AUTH_OIDC_SECRET = os.environ.get('SOCIAL_AUTH_OIDC_SECRET', '')
+
+    # Force OIDC discovery + tokens over a CA bundle that includes step-ca.
+    # The init container in helmchart.yaml builds /tls/ca-bundle.crt by
+    # concatenating the system trust store with the step-ca root, so requests
+    # to https://auth.neptune.lan verify without breaking trust in LE roots
+    # (which other future OIDC backchannels would need).
+    SOCIAL_AUTH_OIDC_VERIFY_SSL = os.environ.get(
+        'REQUESTS_CA_BUNDLE', '/tls/ca-bundle.crt')

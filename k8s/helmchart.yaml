@@ -131,6 +131,65 @@ spec:
     # The chart's `existingSecret` value mounts it.
     existingSecret: netbox-secrets
 
+    # ── OIDC against Authentik on auth.neptune.lan ──────────────────────────
+    # Provider + application + group bindings are managed by
+    # cn-authentik/setup-netbox-oidc.sh. NetBox-side Django wiring is in the
+    # `netbox-oidc-extra` ConfigMap (k8s/oidc-config.yaml), mounted over the
+    # upstream /etc/netbox/config/extra.py placeholder.
+    #
+    # Trust: Python's `requests` library uses REQUESTS_CA_BUNDLE. We need a
+    # bundle that contains BOTH the system CAs (so we can talk to any future
+    # LE-signed OIDC issuer) AND step-ca's root (for auth.neptune.lan today).
+    # The init container below concatenates them into /tls/ca-bundle.crt;
+    # the netbox container then references it via env.
+    extraInitContainers:
+      - name: ca-bundle
+        image: docker.io/netboxcommunity/netbox:v4.6
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            cat /etc/ssl/certs/ca-certificates.crt /step-ca/ca.crt > /tls/ca-bundle.crt
+            chmod 644 /tls/ca-bundle.crt
+            echo "ca-bundle.crt: $(wc -l < /tls/ca-bundle.crt) lines"
+        volumeMounts:
+          - name: step-ca-root
+            mountPath: /step-ca
+            readOnly: true
+          - name: ca-bundle
+            mountPath: /tls
+    extraVolumes:
+      - name: step-ca-root
+        configMap:
+          name: step-ca-root
+      - name: netbox-oidc-extra
+        configMap:
+          name: netbox-oidc-extra
+      - name: ca-bundle
+        emptyDir: {}
+    extraVolumeMounts:
+      - name: ca-bundle
+        mountPath: /tls
+        readOnly: true
+      - name: netbox-oidc-extra
+        mountPath: /etc/netbox/config/extra.py
+        subPath: extra.py
+        readOnly: true
+    extraEnvs:
+      - name: REQUESTS_CA_BUNDLE
+        value: /tls/ca-bundle.crt
+      - name: SOCIAL_AUTH_OIDC_OIDC_ENDPOINT
+        value: https://auth.neptune.lan/application/o/netbox
+      - name: SOCIAL_AUTH_OIDC_KEY
+        valueFrom:
+          secretKeyRef:
+            name: netbox-secrets
+            key: SOCIAL_AUTH_OIDC_KEY
+      - name: SOCIAL_AUTH_OIDC_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: netbox-secrets
+            key: SOCIAL_AUTH_OIDC_SECRET
+
     resources:
       requests: { cpu: 200m, memory: 768Mi }
       limits:   { cpu: 2000m, memory: 1536Mi }

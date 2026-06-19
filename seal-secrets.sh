@@ -95,6 +95,16 @@ SUPERUSER_PASSWORD=$(prompt "" "Initial NetBox superuser password (admin)" "" hi
 SUPERUSER_API_TOKEN=$(prompt "" "Initial NetBox API token" "" hidden)
 REDIS_PASSWORD=$(generate_random)
 
+# Authentik OIDC credentials — created by `cn-authentik/setup-netbox-oidc.sh`,
+# which prints the two values once. Re-run that script if you don't have them.
+# Both keys must exist in the sealed secret because the extraConfig YAML
+# references them via `secretKeyRef` (kubelet fails the projected-volume
+# mount on a missing key, even if the env var isn't read).
+echo "Authentik OIDC for NetBox (from cn-authentik/setup-netbox-oidc.sh):"
+SOCIAL_AUTH_OIDC_KEY=$(prompt "" "Authentik client_id (SOCIAL_AUTH_OIDC_KEY)" "" hidden)
+SOCIAL_AUTH_OIDC_SECRET=$(prompt "" "Authentik client_secret (SOCIAL_AUTH_OIDC_SECRET)" "" hidden)
+echo
+
 # Chart 5.x projects multiple keys from netbox-secrets, some lowercase and some
 # UPPERCASE — and a couple for SMTP that must exist even when unused (kubelet
 # fails the projected-volume mount on a missing key, not just on a referenced
@@ -111,13 +121,15 @@ kubectl create secret generic netbox-secrets \
   --from-literal=api_token="$SUPERUSER_API_TOKEN" \
   --from-literal=REDIS_PASSWORD="$REDIS_PASSWORD" \
   --from-literal=redis_password="$REDIS_PASSWORD" \
+  --from-literal=SOCIAL_AUTH_OIDC_KEY="$SOCIAL_AUTH_OIDC_KEY" \
+  --from-literal=SOCIAL_AUTH_OIDC_SECRET="$SOCIAL_AUTH_OIDC_SECRET" \
   --from-literal=username="admin" \
   --from-literal=email="admin@netbox.lab.gn.al" \
   --from-literal=email_password="" \
   | kubeseal --format yaml --controller-namespace kube-system --controller-name sealed-secrets-controller \
   > k8s/sealed-secrets.yaml
 
-echo "✓ wrote netbox-secrets"
+echo "✓ wrote netbox-secrets (incl. SOCIAL_AUTH_OIDC_{KEY,SECRET})"
 echo
 
 # --- Backup destination + SMTP notifications -----------------------------------
