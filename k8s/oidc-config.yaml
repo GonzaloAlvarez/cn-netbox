@@ -60,7 +60,7 @@ metadata:
   namespace: netbox
 data:
   extra.py: |
-    """OIDC integration via Authentik on auth.neptune.lan.
+    """OIDC integration via Authentik on auth.{neptune.lan,lab.gn.al}.
 
     Authentik provider + application are created by
     cn-authentik/setup-netbox-oidc.sh. NetBox-side wiring uses
@@ -69,11 +69,56 @@ data:
     Login URL:        /oauth/login/oidc/?next=/
     Callback URL:     /oauth/complete/oidc/  (registered on the Authentik side)
     Issuer endpoint:  https://auth.neptune.lan/application/o/netbox
+                      (server-side calls only — pods can't resolve auth.lab.gn.al)
+
+    Browser-facing authorization URL is picked per-request by the
+    HomelabOIDCBackend subclass below — tailnet requests get auth.lab.gn.al,
+    everything else stays on auth.neptune.lan.
     """
     import os
 
+    from social_core.backends.open_id_connect import OpenIdConnectAuth
+
+
+    class HomelabOIDCBackend(OpenIdConnectAuth):
+        """Per-request authorization URL split for the dual-ingress homelab.
+
+        - **Server-side endpoints** (token, userinfo, JWKS, discovery): always
+          https://auth.neptune.lan — pods can resolve this via pfSense Host
+          Override and trust step-ca via /tls/ca-bundle.crt.
+        - **Browser-facing authorization endpoint**:
+            - request.get_host() ends with '.lab.gn.al' (tailnet ingress)
+              → swap the issuer host to auth.lab.gn.al so the tailnet browser
+              (which has no DNS for auth.neptune.lan) can reach Authentik
+              via the VPS traefik-lab → re-encrypt → neptune path.
+            - otherwise (LAN ingress, netbox.k8s.lan)
+              → keep auth.neptune.lan, which the LAN client resolves via
+              pfSense and reaches directly with a step-ca cert.
+
+        The redirect_uri parameter is unaffected — it's built from the request
+        host by python-social-auth, so it correctly stays
+        https://netbox.lab.gn.al/oauth/complete/oidc/ for tailnet and
+        https://netbox.k8s.lan/oauth/complete/oidc/ for LAN, both of which
+        are pre-registered on the Authentik provider.
+        """
+
+        name = 'oidc'
+
+        def authorization_url(self):
+            base = super().authorization_url()
+            request = getattr(self.strategy, 'request', None)
+            if request is not None:
+                host = request.get_host()
+                if host.endswith('.lab.gn.al'):
+                    return base.replace('auth.neptune.lan', 'auth.lab.gn.al', 1)
+            return base
+
+
     REMOTE_AUTH_ENABLED = True
-    REMOTE_AUTH_BACKEND = 'social_core.backends.open_id_connect.OpenIdConnectAuth'
+    # NetBox's configuration.py loads this file as netbox.configuration.extra
+    # (see /opt/netbox/netbox/netbox/configuration.py `_import`), so the
+    # subclass above is importable from Django at exactly this path.
+    REMOTE_AUTH_BACKEND = 'netbox.configuration.extra.HomelabOIDCBackend'
     REMOTE_AUTH_AUTO_CREATE_USER = True
 
     SOCIAL_AUTH_OIDC_OIDC_ENDPOINT = os.environ.get(
