@@ -208,13 +208,23 @@ data:
     SOCIAL_AUTH_OIDC_VERIFY_SSL = os.environ.get(
         'REQUESTS_CA_BUNDLE', '/tls/ca-bundle.crt')
 
-    # Append the homelab role handler to NetBox's default pipeline. Must run
-    # AFTER `social_core.pipeline.user.user_details` (which writes basic user
-    # attrs from `details`) so the superuser flip we make below isn't undone.
-    # NetBox's settings.py exposes SOCIAL_AUTH_PIPELINE; we extend it rather
-    # than redefine it from scratch so future NetBox upgrades that tweak the
-    # pipeline don't surprise us.
-    from netbox.settings import SOCIAL_AUTH_PIPELINE as _DEFAULT_PIPELINE
-    SOCIAL_AUTH_PIPELINE = tuple(_DEFAULT_PIPELINE) + (
+    # Append the homelab role handler to NetBox's default PSA pipeline.
+    # `from netbox.settings import SOCIAL_AUTH_PIPELINE` would be ideal but
+    # triggers a circular import: settings.py imports configuration.py
+    # (which loads us) BEFORE it has finished defining SOCIAL_AUTH_PIPELINE.
+    # Mirror NetBox 4.x's default tuple verbatim and append our step. If
+    # NetBox upstream changes the pipeline in a future release, this list
+    # has to be re-synced (the existing entries are stable across 4.x).
+    SOCIAL_AUTH_PIPELINE = (
+        'social_core.pipeline.social_auth.social_details',
+        'social_core.pipeline.social_auth.social_uid',
+        'social_core.pipeline.social_auth.social_user',
+        'social_core.pipeline.user.get_username',
+        'social_core.pipeline.user.create_user',
+        'social_core.pipeline.social_auth.associate_user',
+        'netbox.authentication.user_default_groups_handler',
+        'social_core.pipeline.social_auth.load_extra_data',
+        'social_core.pipeline.user.user_details',
+        # Homelab additions:
         'homelab_oidc_extra.homelab_authentik_role_handler',
     )
