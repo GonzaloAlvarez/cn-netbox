@@ -146,9 +146,19 @@ data:
         """
         if not user or not response:
             return
-        groups = response.get('groups') or []
+        all_groups = response.get('groups') or []
 
-        from django.contrib.auth.models import Group
+        # NetBox 4.x ships its own Group model (users.models.Group) that
+        # extends django.contrib.auth.models.Group with extra fields. The
+        # User.groups M2M points at *that* model, so creating instances of
+        # django.contrib.auth.models.Group and calling user.groups.set(...)
+        # crashes with `Field 'id' expected a number but got <Group: …>`.
+        from users.models import Group
+
+        # Skip Authentik's built-in admin/read-only groups; they're a UI
+        # concept on the Authentik side, not real homelab roles.
+        skip = {'authentik Admins', 'authentik Read-only'}
+        groups = [g for g in all_groups if g not in skip]
 
         # 1. superuser promotion based on group membership.
         desired_super = 'infra-admins' in groups
@@ -156,13 +166,10 @@ data:
             user.is_superuser = desired_super
             user.save(update_fields=['is_superuser'])
 
-        # 2. Mirror Authentik groups onto Django groups (create if missing).
-        #    Authentik's default groups like "authentik Admins" are pulled in
-        #    too — harmless on NetBox's side and useful as a single source of
-        #    truth for which Authentik group the login came from.
+        # 2. Mirror Authentik groups onto NetBox Groups (create if missing).
         if groups:
-            django_groups = [Group.objects.get_or_create(name=g)[0] for g in groups]
-            user.groups.set(django_groups)
+            netbox_groups = [Group.objects.get_or_create(name=g)[0] for g in groups]
+            user.groups.set(netbox_groups)
         else:
             user.groups.clear()
 
