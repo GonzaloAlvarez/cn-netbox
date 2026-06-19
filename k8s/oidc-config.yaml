@@ -76,6 +76,7 @@ data:
     everything else stays on auth.neptune.lan.
     """
     import os
+    import sys
 
     from social_core.backends.open_id_connect import OpenIdConnectAuth
 
@@ -114,11 +115,16 @@ data:
             return base
 
 
+    # NetBox's configuration.py loads us into sys.modules at
+    # 'netbox.configuration.extra', but `netbox.configuration` is a module
+    # (single file), not a package — Django's import_string therefore fails
+    # with "ModuleNotFoundError: 'netbox.configuration' is not a package" when
+    # asked to resolve REMOTE_AUTH_BACKEND. Re-register this module under a
+    # top-level name so plain import_module('homelab_oidc_extra') succeeds.
+    sys.modules['homelab_oidc_extra'] = sys.modules['netbox.configuration.extra']
+
     REMOTE_AUTH_ENABLED = True
-    # NetBox's configuration.py loads this file as netbox.configuration.extra
-    # (see /opt/netbox/netbox/netbox/configuration.py `_import`), so the
-    # subclass above is importable from Django at exactly this path.
-    REMOTE_AUTH_BACKEND = 'netbox.configuration.extra.HomelabOIDCBackend'
+    REMOTE_AUTH_BACKEND = 'homelab_oidc_extra.HomelabOIDCBackend'
     REMOTE_AUTH_AUTO_CREATE_USER = True
 
     SOCIAL_AUTH_OIDC_OIDC_ENDPOINT = os.environ.get(
