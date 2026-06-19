@@ -93,28 +93,24 @@ data:
         # again the moment they navigate anywhere.
         __module__ = 'homelab_oidc_extra'
 
-        """Per-request authorization URL split for the dual-ingress homelab.
+        """Per-request authorization URL split + Authentik groups claim.
 
         - **Server-side endpoints** (token, userinfo, JWKS, discovery): always
           https://auth.neptune.lan — pods can resolve this via pfSense Host
           Override and trust step-ca via /tls/ca-bundle.crt.
         - **Browser-facing authorization endpoint**:
             - request.get_host() ends with '.lab.gn.al' (tailnet ingress)
-              → swap the issuer host to auth.lab.gn.al so the tailnet browser
-              (which has no DNS for auth.neptune.lan) can reach Authentik
-              via the VPS traefik-lab → re-encrypt → neptune path.
-            - otherwise (LAN ingress, netbox.k8s.lan)
-              → keep auth.neptune.lan, which the LAN client resolves via
-              pfSense and reaches directly with a step-ca cert.
-
-        The redirect_uri parameter is unaffected — it's built from the request
-        host by python-social-auth, so it correctly stays
-        https://netbox.lab.gn.al/oauth/complete/oidc/ for tailnet and
-        https://netbox.k8s.lan/oauth/complete/oidc/ for LAN, both of which
-        are pre-registered on the Authentik provider.
+              → swap to auth.lab.gn.al for the tailnet browser path.
+            - otherwise (netbox.k8s.lan) → keep auth.neptune.lan for LAN.
+        - **Scope**: include `groups` so Authentik puts the user's group
+          membership in the id_token; the pipeline step below maps it to
+          NetBox superuser / Django group membership.
+        - **User details**: hoist `groups` out of the id_token claims so
+          it's available to downstream pipeline steps as `details['groups']`.
         """
 
         name = 'oidc'
+        DEFAULT_SCOPE = ['openid', 'profile', 'email', 'groups']
 
         def authorization_url(self):
             base = super().authorization_url()
@@ -125,17 +121,63 @@ data:
                     return base.replace('auth.neptune.lan', 'auth.lab.gn.al', 1)
             return base
 
+        def get_user_details(self, response):
+            details = super().get_user_details(response)
+            # The `groups` claim lives in the id_token; PSA's
+            # OAuth2OpenIdConnectMixin merges decoded id_token claims into the
+            # response dict before pipeline steps run, so response['groups']
+            # is the canonical place to read them.
+            details['groups'] = response.get('groups') or []
+            return details
+
+
+    def homelab_authentik_role_handler(strategy, details, user=None, *args, **kwargs):
+        """Map Authentik OIDC groups onto NetBox roles + Django group membership.
+
+        - Authentik group `infra-admins`  → NetBox superuser (full access).
+        - Every Authentik group is mirrored as a Django Group on the user; the
+          group is auto-created if it didn't already exist locally. NetBox
+          object-permissions can then be scoped per-group inside the UI.
+
+        Runs once per login (PSA pipeline step). Idempotent.
+        """
+        if not user:
+            return
+        groups = details.get('groups') or []
+
+        from django.contrib.auth.models import Group
+
+        # 1. superuser promotion based on group membership.
+        desired_super = 'infra-admins' in groups
+        if user.is_superuser != desired_super:
+            user.is_superuser = desired_super
+            user.save(update_fields=['is_superuser'])
+
+        # 2. Mirror Authentik groups onto Django groups (create if missing).
+        #    Authentik's default groups like "authentik Admins" are pulled in
+        #    too — harmless on NetBox's side and useful as a single source of
+        #    truth for which Authentik group the login came from.
+        if groups:
+            django_groups = [Group.objects.get_or_create(name=g)[0] for g in groups]
+            user.groups.set(django_groups)
+        else:
+            user.groups.clear()
+
 
     # NetBox's configuration.py loads us into sys.modules at
     # 'netbox.configuration.extra' AFTER our module body finishes executing,
     # AND `netbox.configuration` is a single-file module (not a package), so
     # Django's import_string can't resolve REMOTE_AUTH_BACKEND through it
-    # either way. Build a brand-new top-level ModuleType with just the
-    # backend class and register it now; Django will find it via
-    # import_module('homelab_oidc_extra').
+    # either way. Build a brand-new top-level ModuleType with the backend
+    # class AND the pipeline handler attached, and register it now; Django
+    # will find both via import_module('homelab_oidc_extra').
     _homelab_oidc_module = types.ModuleType('homelab_oidc_extra')
     _homelab_oidc_module.HomelabOIDCBackend = HomelabOIDCBackend
+    _homelab_oidc_module.homelab_authentik_role_handler = homelab_authentik_role_handler
     sys.modules['homelab_oidc_extra'] = _homelab_oidc_module
+    # Pin __module__ on the function too so any stack traces or PSA debug
+    # logging point at the right place.
+    homelab_authentik_role_handler.__module__ = 'homelab_oidc_extra'
 
     REMOTE_AUTH_ENABLED = True
     REMOTE_AUTH_BACKEND = 'homelab_oidc_extra.HomelabOIDCBackend'
@@ -165,3 +207,14 @@ data:
     # (which other future OIDC backchannels would need).
     SOCIAL_AUTH_OIDC_VERIFY_SSL = os.environ.get(
         'REQUESTS_CA_BUNDLE', '/tls/ca-bundle.crt')
+
+    # Append the homelab role handler to NetBox's default pipeline. Must run
+    # AFTER `social_core.pipeline.user.user_details` (which writes basic user
+    # attrs from `details`) so the superuser flip we make below isn't undone.
+    # NetBox's settings.py exposes SOCIAL_AUTH_PIPELINE; we extend it rather
+    # than redefine it from scratch so future NetBox upgrades that tweak the
+    # pipeline don't surprise us.
+    from netbox.settings import SOCIAL_AUTH_PIPELINE as _DEFAULT_PIPELINE
+    SOCIAL_AUTH_PIPELINE = tuple(_DEFAULT_PIPELINE) + (
+        'homelab_oidc_extra.homelab_authentik_role_handler',
+    )
