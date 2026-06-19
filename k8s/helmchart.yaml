@@ -142,7 +142,9 @@ spec:
     # LE-signed OIDC issuer) AND step-ca's root (for auth.neptune.lan today).
     # The init container below concatenates them into /tls/ca-bundle.crt;
     # the netbox container then references it via env.
-    extraInitContainers:
+    # Chart 5.0.x uses `initContainers:` (no extra- prefix) — checked
+    # against templates/deployment.yaml line 58.
+    initContainers:
       - name: ca-bundle
         image: docker.io/netboxcommunity/netbox:v4.6
         command: ["/bin/sh", "-c"]
