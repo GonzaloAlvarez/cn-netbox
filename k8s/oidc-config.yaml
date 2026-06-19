@@ -83,6 +83,16 @@ data:
 
 
     class HomelabOIDCBackend(OpenIdConnectAuth):
+        # Django stores `f'{cls.__module__}.{cls.__name__}'` in the session
+        # under _auth_user_backend, and re-imports it on every subsequent
+        # request to restore request.user. NetBox's configuration.py loads
+        # this file via spec_from_file_location('', path), so without an
+        # override `__module__` is the empty string and Django serializes us
+        # as `.HomelabOIDCBackend`, which import_string then refuses to
+        # resolve — the SSO sign-in "succeeds" but the user appears anonymous
+        # again the moment they navigate anywhere.
+        __module__ = 'homelab_oidc_extra'
+
         """Per-request authorization URL split for the dual-ingress homelab.
 
         - **Server-side endpoints** (token, userinfo, JWKS, discovery): always
